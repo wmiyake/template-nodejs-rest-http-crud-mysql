@@ -1,0 +1,283 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: nodejs-mysql-persistent
+  annotations:
+    openshift.io/display-name: "Node.js + MySQL"
+    description: "An example Node.js application with a MySQL database."
+    tags: "quickstart,nodejs"
+    iconClass: "icon-nodejs"
+    openshift.io/long-description: "This template defines resources needed to develop a Node.js application, including a build configuration, application deployment configuration, and database deployment configuration."
+    openshift.io/provider-display-name: "Red Hat, Inc."
+    openshift.io/documentation-url: "https://github.com/wmiyake/nodejs-rest-http-crud-mysql"
+    openshift.io/support-url: "https://access.redhat.com"
+    template.openshift.io/bindable: "false"
+parameters:
+  - name: NAME
+    displayName: Name
+    description: "The name assigned to all of the frontend objects defined in this template."
+    required: true
+    value: "nodejs-mysql-persistent"
+  - name: NAMESPACE
+    displayName: Namespace
+    description: "The OpenShift Namespace where the ImageStream resides."
+    required: true
+    value: "openshift"
+  - name: NODEJS_VERSION
+    displayName: Version of NodeJS Image
+    description: "Version of NodeJS image to be used (14-ubi8, 16-ubi8, or latest)."
+    required: true
+    value: "16-ubi8"
+  - name: MYSQL_VERSION
+    displayName: Version of MySQL Image
+    description: "Version of MySQL image to be used."
+    required: true
+    value: "latest"
+  - name: MEMORY_LIMIT
+    displayName: Memory Limit
+    description: "Maximum amount of memory the Node.js container can use."
+    required: true
+    value: "256Mi"
+  - name: MEMORY_MYSQL_LIMIT
+    displayName: Memory Limit (MySQL)
+    description: "Maximum amount of memory the MySQL container can use."
+    required: true
+    value: "256Mi"
+  - name: VOLUME_CAPACITY
+    displayName: Volume Capacity
+    description: "Volume space available for data, e.g. 512Mi, 2Gi"
+    required: true
+    value: "1Gi"
+  - name: SOURCE_REPOSITORY_URL
+    displayName: Git Repository URL
+    description: "The URL of the repository with your application source code."
+    required: true
+    value: "https://github.com/wmiyake/nodejs-rest-http-crud-mysql.git"
+  - name: SOURCE_REPOSITORY_REF
+    displayName: Git Reference
+    description: "Set this to a branch name, tag or other ref of your repository if you are not using the default branch."
+  - name: CONTEXT_DIR
+    displayName: Context Directory
+    description: "Set this to the relative path to your project if it is not in the root of your repository."
+  - name: APPLICATION_DOMAIN
+    displayName: Application Hostname
+    description: "The exposed hostname that will route to the Node.js service, if left blank a value will be defaulted."
+  - name: GITHUB_WEBHOOK_SECRET
+    displayName: GitHub Webhook Secret
+    description: "Github trigger secret.  A difficult to guess string encoded as part of the webhook URL.  Not encrypted."
+    generate: expression
+    from: "[a-zA-Z0-9]{40}"
+  - name: GENERIC_WEBHOOK_SECRET
+    displayName: Generic Webhook Secret
+    description: "A secret string used to configure the Generic webhook."
+    generate: expression
+    from: "[a-zA-Z0-9]{40}"
+  - name: DATABASE_SERVICE_NAME
+    displayName: Database Service Name
+    required: true
+    value: mysql
+  - name: DATABASE_USER
+    displayName: MySQL Username
+    description: "Username for MySQL user that will be used for accessing the database."
+    generate: expression
+    from: "user[A-Z0-9]{3}"
+  - name: DATABASE_PASSWORD
+    displayName: MySQL Password
+    description: "Password for the MySQL user."
+    generate: expression
+    from: "[a-zA-Z0-9]{16}"
+  - name: DATABASE_NAME
+    displayName: Database Name
+    required: true
+    value: my_data
+  - name: DATABASE_ADMIN_PASSWORD
+    displayName: Database Administrator Password
+    description: "Password for the database admin user."
+    generate: expression
+    from: "[a-zA-Z0-9]{16}"
+  - name: NPM_MIRROR
+    displayName: Custom NPM Mirror URL
+    description: "The custom NPM mirror URL"
+    value: ""
+objects:
+  - kind: Secret
+    apiVersion: v1
+    metadata:
+      name: ${NAME}
+    stringData:
+      database-user: "${DATABASE_USER}"
+      database-password: "${DATABASE_PASSWORD}"
+      database-admin-password: "${DATABASE_ADMIN_PASSWORD}"
+  - kind: Service
+    apiVersion: v1
+    metadata:
+      name: ${NAME}
+      annotations:
+        description: "Exposes and load balances the application pods"
+        service.alpha.openshift.io/dependencies: '[{"name": "${DATABASE_SERVICE_NAME}", "kind": "Service"}]'
+    spec:
+      ports:
+        - name: web
+          port: 8080
+          targetPort: 8080
+      selector:
+        name: "${NAME}"
+  - kind: Route
+    apiVersion: route.openshift.io/v1
+    metadata:
+      name: ${NAME}
+    spec:
+      host: "${APPLICATION_DOMAIN}"
+      to:
+        kind: Service
+        name: "${NAME}"
+  - kind: ImageStream
+    apiVersion: image.openshift.io/v1
+    metadata:
+      name: ${NAME}
+      annotations:
+        description: "Keeps track of changes in the application image"
+  - kind: BuildConfig
+    apiVersion: build.openshift.io/v1
+    metadata:
+      name: ${NAME}
+      annotations:
+        description: "Defines how to build the application"
+        template.alpha.openshift.io/wait-for-ready: "true"
+    spec:
+      source:
+        type: Git
+        git:
+          uri: "${SOURCE_REPOSITORY_URL}"
+          ref: "${SOURCE_REPOSITORY_REF}"
+        contextDir: "${CONTEXT_DIR}"
+      strategy:
+        type: Source
+        sourceStrategy:
+          from:
+            kind: ImageStreamTag
+            namespace: "${NAMESPACE}"
+            name: "nodejs:${NODEJS_VERSION}"
+          env:
+            - name: NPM_MIRROR
+              value: "${NPM_MIRROR}"
+      output:
+        to:
+          kind: ImageStreamTag
+          name: "${NAME}:latest"
+      triggers:
+        - type: ImageChange
+        - type: ConfigChange
+        - type: GitHub
+          github:
+            secret: "${GITHUB_WEBHOOK_SECRET}"
+        - type: Generic
+          generic:
+            secret: "${GENERIC_WEBHOOK_SECRET}"
+      postCommit: {}
+  - kind: DeploymentConfig
+    apiVersion: apps.openshift.io/v1
+    metadata:
+      name: ${NAME}
+    spec:
+      replicas: 1
+      selector:
+        name: "${NAME}"
+      template:
+        metadata:
+          labels:
+            name: "${NAME}"
+        spec:
+          containers:
+            - name: "${NAME}"
+              image: "${NAME}:latest"
+              ports:
+                - containerPort: 8080
+                  protocol: TCP
+              env:
+                - name: DATABASE_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${NAME}
+                      key: database-user
+                - name: DATABASE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${NAME}
+                      key: database-password
+                - name: DATABASE_NAME
+                  value: "${DATABASE_NAME}"
+                - name: DATABASE_HOST
+                  value: "${DATABASE_SERVICE_NAME}"
+                - name: DATABASE_PORT
+                  value: "3306"
+                - name: NODE_ENV
+                  value: "production"
+                - name: DEBUG
+                  value: "*"
+                - name: HTTP_PORT
+                  value: "8080"
+              resources:
+                limits:
+                  memory: "${MEMORY_LIMIT}"
+                requests:
+                  memory: "${MEMORY_LIMIT}"
+  - kind: PersistentVolumeClaim
+    apiVersion: v1
+    metadata:
+      name: ${DATABASE_SERVICE_NAME}
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: "${VOLUME_CAPACITY}"
+  - kind: Service
+    apiVersion: v1
+    metadata:
+      name: ${DATABASE_SERVICE_NAME}
+    spec:
+      ports:
+        - name: mysql
+          port: 3306
+      selector:
+        app: ${DATABASE_SERVICE_NAME}
+  - kind: DeploymentConfig
+    apiVersion: apps.openshift.io/v1
+    metadata:
+      name: ${DATABASE_SERVICE_NAME}
+    spec:
+      replicas: 1
+      selector:
+        app: ${DATABASE_SERVICE_NAME}
+      template:
+        metadata:
+          labels:
+            app: ${DATABASE_SERVICE_NAME}
+        spec:
+          containers:
+            - name: mysql
+              image: "mysql:${MYSQL_VERSION}"
+              env:
+                - name: MYSQL_DATABASE
+                  value: "${DATABASE_NAME}"
+                - name: MYSQL_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${NAME}
+                      key: database-user
+                - name: MYSQL_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${NAME}
+                      key: database-password
+              ports:
+                - containerPort: 3306
+                  protocol: TCP
+              volumeMounts:
+                - name: mysql-data
+                  mountPath: /var/lib/mysql/data
+          volumes:
+            - name: mysql-data
+              persistentVolumeClaim:
+                claimName: ${DATABASE_SERVICE_NAME}
